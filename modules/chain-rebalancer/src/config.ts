@@ -2,6 +2,8 @@ import { VectorRouterConfig, VectorRouterConfigSchema } from "@connext/vector-ty
 import Ajv from "ajv";
 import { getAddress } from "@ethersproject/address";
 import { BigNumber } from "@ethersproject/bignumber";
+import { Wallet } from "@ethersproject/wallet";
+import { ChannelSigner } from "@connext/vector-utils";
 
 const ajv = new Ajv();
 
@@ -49,6 +51,9 @@ vectorConfig.rebalanceProfiles = vectorConfig.rebalanceProfiles.map((profile) =>
     assetId: getAddress(profile.assetId),
   };
 });
+
+export const routerWallet = Wallet.fromMnemonic(mnemonic);
+export const routerSigner = new ChannelSigner(routerWallet.privateKey);
 
 export const config = {
   dbUrl,
