@@ -88,7 +88,7 @@ server.addHook("onReady", async () => {
   const relevantChannels = channels.filter((c) => c.networkContext.chainId === chainId);
   console.log(`Investigating ${relevantChannels.length}/${channels.length} channels (on ${chainId})`);
   const provider = new JsonRpcProvider(providerUrl, chainId);
-  const outOfBalance: any[] = [];
+  const outOfBalance = [];
   for (const channel of channels) {
     const assetIdx = channel.assetIds.findIndex((a) => a.toLowerCase() === assetId.toLowerCase());
     if (assetIdx === -1) {
@@ -109,8 +109,6 @@ server.addHook("onReady", async () => {
     if (onchain.eq(offchain)) {
       continue;
     }
-    console.log("onchain: ", onchain.toString());
-    console.log("offchain: ", offchain.toString());
 
     // check alice unsubmitted
     const aliceWithdrawalCreateUpdates = await store.getCreateUpdates(
@@ -229,11 +227,21 @@ server.addHook("onReady", async () => {
   const bobWithdrawals = outOfBalance.reduce((a, b) => {
     return a.add(b.bobUnsubmitted);
   }, BigNumber.from(0));
+  const actuallyUnaccounted = await Promise.all(
+    outOfBalance
+      .filter(
+        (deets) => !BigNumber.from(deets.diff).eq(BigNumber.from(deets.bobUnsubmitted).add(deets.aliceUnsubmitted)),
+      )
+      .map(async (c) => {
+        return store.getChannelState(c.channelAddress);
+      }),
+  );
   console.log(`Found ${outOfBalance.length}/${relevantChannels.length} channels out of whack`);
   console.log(`Total of ${formatEther(diffs)} unaccounted`);
   console.log(`Total of ${formatEther(aliceWithdrawals)} unsubmitted alice withdrawals`);
   console.log(`Total of ${formatEther(bobWithdrawals)} unsubmitted bob withdrawals`);
-  console.log("Details:", outOfBalance);
+  // console.log("Details:", outOfBalance);
+  console.log("Actual Unaccounted Channels:", JSON.stringify(actuallyUnaccounted, null, 2));
   console.log("complete");
 });
 
