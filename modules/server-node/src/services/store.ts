@@ -964,6 +964,91 @@ export class PrismaStore implements IServerNodeStore {
     return convertTransferEntityToFullTransferState(transfer);
   }
 
+  async getTransfersForChannel(channelAddress: string) {
+    const transfers = await this.prisma.transfer.findMany({
+      where: { channelAddressId: channelAddress },
+      include: {
+        channel: true,
+        createUpdate: true,
+        resolveUpdate: true,
+      },
+    });
+    for (const transfer of transfers) {
+      if (!transfer.channel) {
+        const channel = await this.prisma.channel.findUnique({ where: { channelAddress: transfer.channelAddressId } });
+        transfer.channel = channel;
+      }
+    }
+    return transfers.map(convertTransferEntityToFullTransferState);
+  }
+
+  async getCreateUpdates(channelAddress: string, assetId: string, transferDefinition: string, fromIdentifier: string) {
+    return this.prisma.update.findMany({
+      where: { channelAddressId: channelAddress, type: UpdateType.create, transferDefinition, assetId, fromIdentifier },
+    });
+  }
+
+  async getWithdrawCommitmentData(
+    channelAddress: string,
+    transferId: string,
+    assetId: string,
+    transferDefinition: string,
+    fromIdentifier: string,
+  ) {
+    const createUpdates = await this.prisma.update.findMany({
+      where: {
+        channelAddressId: channelAddress,
+        type: UpdateType.create,
+        transferDefinition,
+        assetId,
+        fromIdentifier,
+        transferId,
+      },
+    });
+    const resolveUpdates = await this.prisma.update.findMany({
+      where: {
+        channelAddressId: channelAddress,
+        type: UpdateType.resolve,
+        transferDefinition,
+        assetId,
+        toIdentifier: fromIdentifier,
+        transferId,
+      },
+    });
+    const channel = await this.prisma.channel.findUnique({ where: { channelAddress } });
+
+    if (resolveUpdates.length > 1 || createUpdates.length > 1) {
+      throw new Error("Bad query");
+    }
+    const [createUpdate] = createUpdates;
+    const [resolveUpdate] = resolveUpdates;
+
+    if (!createUpdate || !resolveUpdate || !channel) {
+      console.log(!!createUpdate, !!resolveUpdate, !!channel);
+      return undefined;
+    }
+
+    const initialState = JSON.parse(createUpdate.transferInitialState ?? "{}");
+    const resolver = JSON.parse(resolveUpdate?.transferResolver ?? "{}");
+
+    // TODO: will this return invalid jsons if the transfer is resolved
+    const aliceIsInitiator = channel.participantA === getSignerAddressFromPublicIdentifier(createUpdate.fromIdentifier);
+
+    return {
+      aliceSignature: aliceIsInitiator ? initialState.initiatorSignature : resolver.responderSignature,
+      bobSignature: aliceIsInitiator ? resolver.responderSignature : initialState.initiatorSignature,
+      channelAddress,
+      alice: channel.participantA,
+      bob: channel.participantB,
+      recipient: createUpdate.transferToA, // balance = [toA, toB]
+      assetId: createUpdate!.assetId,
+      amount: BigNumber.from(createUpdate.transferAmountA).sub(initialState.fee).toString(),
+      nonce: initialState.nonce,
+      callData: initialState.callData,
+      callTo: initialState.callTo,
+    };
+  }
+
   async getTransfers(filterOpts?: GetTransfersFilterOpts): Promise<FullTransferState[]> {
     const filterQuery = [];
     if (filterOpts?.channelAddress) {

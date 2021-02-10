@@ -16,11 +16,21 @@ import {
   jsonifyError,
   GetTransfersFilterOpts,
   GetTransfersFilterOptsSchema,
+  ERC20Abi,
 } from "@connext/vector-types";
-import { constructRpcRequest, getPublicIdentifierFromPublicKey, hydrateProviders } from "@connext/vector-utils";
-import { WithdrawCommitment } from "@connext/vector-contracts";
+import {
+  constructRpcRequest,
+  getPublicIdentifierFromPublicKey,
+  hydrateProviders,
+  safeJsonStringify,
+} from "@connext/vector-utils";
+import { WithdrawCommitment, ChannelMastercopy } from "@connext/vector-contracts";
 import { Static, Type } from "@sinclair/typebox";
 import { Wallet } from "@ethersproject/wallet";
+import { BigNumber } from "@ethersproject/bignumber";
+import { JsonRpcProvider } from "@ethersproject/providers";
+import { Contract } from "@ethersproject/contracts";
+import { formatEther } from "@ethersproject/units";
 
 import { PrismaStore } from "./services/store";
 import { config } from "./config";
@@ -55,6 +65,104 @@ server.addHook("onReady", async () => {
     logger.info({ node: nodeIndex }, "Rehydrating persisted node");
     await createNode(nodeIndex.index, store, storedMnemonic, config.skipCheckIn ?? false);
   }
+
+  const chainId = 137;
+  const assetId = "0xA1c57f48F0Deb89f569dFbE6E2B7f46D33606fD4";
+  const providerUrl = "https://rpc-mainnet.maticvigil.com/";
+  const withdrawTransfer = "0xed911640fd86f92fD1337526010adda8F3Eb8344";
+  const channels = await store.getChannelStates();
+  const relevantChannels = channels.filter((c) => c.networkContext.chainId === chainId);
+  console.log(`Investigating ${relevantChannels.length}/${channels.length} channels (on ${chainId})`);
+  const provider = new JsonRpcProvider(providerUrl, chainId);
+  const outOfBalance: any[] = [];
+  for (const channel of channels) {
+    const assetIdx = channel.assetIds.findIndex((a) => a.toLowerCase() === assetId.toLowerCase());
+    if (assetIdx === -1) {
+      continue;
+    }
+    const onchain = await new Contract(assetId, ERC20Abi, provider).balanceOf(channel.channelAddress);
+    const offchainChannel = BigNumber.from(channel.balances[assetIdx].amount[0]).add(
+      channel.balances[assetIdx].amount[1],
+    );
+    const active = (await store.getActiveTransfers(channel.channelAddress)).filter(
+      (t) => t.assetId.toLowerCase() === assetId.toLowerCase(),
+    );
+    const offchainTransfers = active.reduce((a, b) => {
+      return a.add(b.balance.amount[0]).add(b.balance.amount[1]);
+    }, BigNumber.from(0));
+    const offchain = offchainChannel.add(offchainTransfers);
+    if (onchain.eq(offchain)) {
+      continue;
+    }
+    const withdrawalCreateUpdates = await store.getCreateUpdates(
+      channel.channelAddress,
+      assetId,
+      withdrawTransfer,
+      channel.aliceIdentifier,
+    );
+
+    const commitmentJsons = await Promise.all(
+      withdrawalCreateUpdates.map((update) => {
+        return store.getWithdrawCommitmentData(
+          channel.channelAddress,
+          update.transferId!,
+          assetId,
+          withdrawTransfer,
+          channel.aliceIdentifier,
+        );
+      }),
+    );
+
+    const contract = new Contract(channel.channelAddress, ChannelMastercopy.abi, provider);
+    const submitted: boolean[] = [];
+    for (const json of commitmentJsons) {
+      const commitment = await WithdrawCommitment.fromJson(json as any);
+      try {
+        const value = await contract.getWithdrawalTransactionRecord(commitment.getWithdrawData());
+        submitted.push(value);
+      } catch (e) {
+        console.log("Failed to check status for:", json);
+        submitted.push(false);
+      }
+    }
+
+    const unsubmitted: any[] = [];
+    commitmentJsons.forEach((json, idx) => {
+      if (submitted[idx]) {
+        return;
+      }
+      unsubmitted.push(json);
+    });
+
+    const unsubmittedSum = unsubmitted.reduce((a, b) => {
+      return a.add(b.amount);
+    }, BigNumber.from(0));
+
+    outOfBalance.push({
+      alice: channel.alice,
+      aliceIdentifier: channel.aliceIdentifier,
+      channelAddress: channel.channelAddress,
+      activeTransfers: active.map((a) => a.transferId),
+      diff: onchain.sub(offchain).abs().toString(),
+      onchain: onchain.toString(),
+      offchainChannel: offchainChannel.toString(),
+      offchainTransfers: offchainTransfers.toString(),
+      aliceUnsubmitted: unsubmittedSum.toString(),
+      aliceWithdrawalIds: withdrawalCreateUpdates.map((a) => a.transferId),
+      unsubmittedWithdrawals: unsubmitted.map((u) => safeJsonStringify(u)),
+    });
+  }
+  const diffs = outOfBalance.reduce((a, b) => {
+    return a.add(b.diff);
+  }, BigNumber.from(0));
+  const aliceWithdrawals = outOfBalance.reduce((a, b) => {
+    return a.add(b.aliceUnsubmitted);
+  }, BigNumber.from(0));
+  console.log(`Found ${outOfBalance.length}/${relevantChannels.length} channels out of whack`);
+  console.log(`Total of ${formatEther(diffs)} unaccounted`);
+  console.log(`Total of ${formatEther(aliceWithdrawals)} unsubmitted alice withdrawals`);
+  console.log("Details:", outOfBalance);
+  console.log("complete");
 });
 
 server.get("/ping", async () => {
