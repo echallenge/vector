@@ -2,6 +2,31 @@
 
 ## Next Release
 
+## 0.1.15-beta.10
+
+- \[router\] Improve router dashboards
+- \[contracts\] Add xdai deployment
+
+## 0.1.15-beta.9
+
+- \[router\] Add router dashboards
+
+## 0.1.15-beta.8
+
+- \[types\] Remove unique constraint from `TransferEncodingSchema`
+
+## 0.1.15-beta.7
+
+- \[ops\] Fix github actions.
+
+## 0.1.15-beta.6
+
+- \[node, router\] Prisma upgrade.
+
+## 0.1.15-beta.5
+
+- \[contracts\] Fix token approval bug
+
 ## 0.1.15-beta.4
 
 - \[iframe\] Improve error parsing
