@@ -178,8 +178,6 @@ server.addHook("onReady", async () => {
       }),
     );
 
-    console.log();
-
     const bobSubmitted: boolean[] = [];
     for (const json of bobCommitmentJsons) {
       const commitment = await WithdrawCommitment.fromJson(json as any);
@@ -210,7 +208,7 @@ server.addHook("onReady", async () => {
       bobIdentifier: channel.bobIdentifier,
       channelAddress: channel.channelAddress,
       activeTransfers: active.map((a) => a.transferId),
-      diff: onchain.sub(offchain).abs().toString(),
+      diff: onchain.gt(offchain) ? onchain.sub(offchain).toString() : `-${offchain.sub(onchain).toString()}`,
       onchain: onchain.toString(),
       offchainChannel: offchainChannel.toString(),
       offchainTransfers: offchainTransfers.toString(),
