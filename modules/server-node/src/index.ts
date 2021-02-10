@@ -94,15 +94,17 @@ server.addHook("onReady", async () => {
     if (onchain.eq(offchain)) {
       continue;
     }
-    const withdrawalCreateUpdates = await store.getCreateUpdates(
+
+    // check alice unsubmitted
+    const aliceWithdrawalCreateUpdates = await store.getCreateUpdates(
       channel.channelAddress,
       assetId,
       withdrawTransfer,
       channel.aliceIdentifier,
     );
 
-    const commitmentJsons = await Promise.all(
-      withdrawalCreateUpdates.map((update) => {
+    const aliceCommitmentJsons = await Promise.all(
+      aliceWithdrawalCreateUpdates.map((update) => {
         return store.getWithdrawCommitmentData(
           channel.channelAddress,
           update.transferId!,
@@ -114,42 +116,83 @@ server.addHook("onReady", async () => {
     );
 
     const contract = new Contract(channel.channelAddress, ChannelMastercopy.abi, provider);
-    const submitted: boolean[] = [];
-    for (const json of commitmentJsons) {
+    const aliceSubmitted: boolean[] = [];
+    for (const json of aliceCommitmentJsons) {
       const commitment = await WithdrawCommitment.fromJson(json as any);
       try {
         const value = await contract.getWithdrawalTransactionRecord(commitment.getWithdrawData());
-        submitted.push(value);
+        aliceSubmitted.push(value);
       } catch (e) {
         console.log("Failed to check status for:", json);
-        submitted.push(false);
+        aliceSubmitted.push(false);
       }
     }
 
-    const unsubmitted: any[] = [];
-    commitmentJsons.forEach((json, idx) => {
-      if (submitted[idx]) {
-        return;
-      }
-      unsubmitted.push(json);
+    const aliceUnsubmitted = aliceCommitmentJsons.filter((json, idx) => {
+      return !aliceSubmitted[idx];
     });
 
-    const unsubmittedSum = unsubmitted.reduce((a, b) => {
-      return a.add(b.amount);
+    const aliceUnsubmittedSum = aliceUnsubmitted.reduce((a, b) => {
+      return a.add(b!.amount);
+    }, BigNumber.from(0));
+
+    // check bob unsubmitted
+    const bobWithdrawalCreateUpdates = await store.getCreateUpdates(
+      channel.channelAddress,
+      assetId,
+      withdrawTransfer,
+      channel.bobIdentifier,
+    );
+
+    const bobCommitmentJsons = await Promise.all(
+      bobWithdrawalCreateUpdates.map((update) => {
+        return store.getWithdrawCommitmentData(
+          channel.channelAddress,
+          update.transferId!,
+          assetId,
+          withdrawTransfer,
+          channel.bobIdentifier,
+        );
+      }),
+    );
+
+    console.log();
+
+    const bobSubmitted: boolean[] = [];
+    for (const json of bobCommitmentJsons) {
+      const commitment = await WithdrawCommitment.fromJson(json as any);
+      try {
+        const value = await contract.getWithdrawalTransactionRecord(commitment.getWithdrawData());
+        bobSubmitted.push(value);
+      } catch (e) {
+        console.log("Failed to check status for:", json);
+        bobSubmitted.push(false);
+      }
+    }
+
+    const bobUnsubmitted = bobCommitmentJsons.filter((json, idx) => {
+      return !bobSubmitted[idx];
+    });
+
+    const bobUnsubmittedSum = bobUnsubmitted.reduce((a, b) => {
+      return a.add(b!.amount);
     }, BigNumber.from(0));
 
     outOfBalance.push({
-      alice: channel.alice,
-      aliceIdentifier: channel.aliceIdentifier,
+      bob: channel.bob,
+      bobIdentifier: channel.bobIdentifier,
       channelAddress: channel.channelAddress,
       activeTransfers: active.map((a) => a.transferId),
       diff: onchain.sub(offchain).abs().toString(),
       onchain: onchain.toString(),
       offchainChannel: offchainChannel.toString(),
       offchainTransfers: offchainTransfers.toString(),
-      aliceUnsubmitted: unsubmittedSum.toString(),
-      aliceWithdrawalIds: withdrawalCreateUpdates.map((a) => a.transferId),
-      unsubmittedWithdrawals: unsubmitted.map((u) => safeJsonStringify(u)),
+      bobUnsubmitted: bobUnsubmittedSum.toString(),
+      bobWithdrawalIds: bobWithdrawalCreateUpdates.map((a) => a.transferId),
+      bobUnsubmittedWithdrawals: bobUnsubmitted.map((u) => safeJsonStringify(u)),
+      aliceUnsubmitted: aliceUnsubmittedSum.toString(),
+      aliceWithdrawalIds: aliceWithdrawalCreateUpdates.map((a) => a.transferId),
+      aliceUnsubmittedWithdrawals: aliceUnsubmitted.map((u) => safeJsonStringify(u)),
     });
   }
   const diffs = outOfBalance.reduce((a, b) => {
@@ -158,9 +201,13 @@ server.addHook("onReady", async () => {
   const aliceWithdrawals = outOfBalance.reduce((a, b) => {
     return a.add(b.aliceUnsubmitted);
   }, BigNumber.from(0));
+  const bobWithdrawals = outOfBalance.reduce((a, b) => {
+    return a.add(b.bobUnsubmitted);
+  }, BigNumber.from(0));
   console.log(`Found ${outOfBalance.length}/${relevantChannels.length} channels out of whack`);
   console.log(`Total of ${formatEther(diffs)} unaccounted`);
   console.log(`Total of ${formatEther(aliceWithdrawals)} unsubmitted alice withdrawals`);
+  console.log(`Total of ${formatEther(bobWithdrawals)} unsubmitted bob withdrawals`);
   console.log("Details:", outOfBalance);
   console.log("complete");
 });
