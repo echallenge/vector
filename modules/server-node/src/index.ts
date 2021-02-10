@@ -66,10 +66,24 @@ server.addHook("onReady", async () => {
     await createNode(nodeIndex.index, store, storedMnemonic, config.skipCheckIn ?? false);
   }
 
-  const chainId = 137;
-  const assetId = "0xA1c57f48F0Deb89f569dFbE6E2B7f46D33606fD4";
-  const providerUrl = "https://rpc-mainnet.maticvigil.com/";
+  // // MATIC
+  // const chainId = 137;
+  // // DAI
+  // const assetId = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
+  // // MANA
+  // const assetId = "0xA1c57f48F0Deb89f569dFbE6E2B7f46D33606fD4";
+  // const providerUrl = "https://rpc-mainnet.maticvigil.com/";
+  // const withdrawTransfer = "0xed911640fd86f92fD1337526010adda8F3Eb8344";
+
+  // MAINNET
+  const chainId = 1;
+  // DAI
+  // const assetId = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
+  // MANA
+  const assetId = "0x0F5D2fB29fb7d3CFeE444a200298f468908cC942";
+  const providerUrl = "https://mainnet.infura.io/v3/d1caeba320f94122ba8f791f50122c4c";
   const withdrawTransfer = "0xed911640fd86f92fD1337526010adda8F3Eb8344";
+
   const channels = await store.getChannelStates();
   const relevantChannels = channels.filter((c) => c.networkContext.chainId === chainId);
   console.log(`Investigating ${relevantChannels.length}/${channels.length} channels (on ${chainId})`);
@@ -91,9 +105,12 @@ server.addHook("onReady", async () => {
       return a.add(b.balance.amount[0]).add(b.balance.amount[1]);
     }, BigNumber.from(0));
     const offchain = offchainChannel.add(offchainTransfers);
+
     if (onchain.eq(offchain)) {
       continue;
     }
+    console.log("onchain: ", onchain.toString());
+    console.log("offchain: ", offchain.toString());
 
     // check alice unsubmitted
     const aliceWithdrawalCreateUpdates = await store.getCreateUpdates(
@@ -119,11 +136,16 @@ server.addHook("onReady", async () => {
     const aliceSubmitted: boolean[] = [];
     for (const json of aliceCommitmentJsons) {
       const commitment = await WithdrawCommitment.fromJson(json as any);
+      if ((await provider.getCode(channel.channelAddress)) === "0x") {
+        // channel has not been deployed, withdrawal cannot have been submitted
+        aliceSubmitted.push(false);
+        continue;
+      }
       try {
         const value = await contract.getWithdrawalTransactionRecord(commitment.getWithdrawData());
         aliceSubmitted.push(value);
       } catch (e) {
-        console.log("Failed to check status for:", json);
+        console.log("Failed to check status for:", json, e);
         aliceSubmitted.push(false);
       }
     }
@@ -161,6 +183,11 @@ server.addHook("onReady", async () => {
     const bobSubmitted: boolean[] = [];
     for (const json of bobCommitmentJsons) {
       const commitment = await WithdrawCommitment.fromJson(json as any);
+      if ((await provider.getCode(channel.channelAddress)) === "0x") {
+        // channel has not been deployed, withdrawal cannot have been submitted
+        bobSubmitted.push(false);
+        continue;
+      }
       try {
         const value = await contract.getWithdrawalTransactionRecord(commitment.getWithdrawData());
         bobSubmitted.push(value);
