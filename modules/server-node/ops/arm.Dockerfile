@@ -16,7 +16,8 @@ RUN chmod +x /prisma-arm64/* ;\
     curl https://raw.githubusercontent.com/vishnubob/wait-for-it/ed77b63706ea721766a62ff22d3a251d8b4a6a30/wait-for-it.sh > /bin/wait-for ;\
     chmod +x /bin/wait-for
 
-RUN npm install --production
+RUN npm install --production ;\
+    npm install -g nodemon
 
 COPY ops ops
 COPY prisma-postgres prisma-postgres
